@@ -3,12 +3,22 @@
 > **Datathon Track 1: Health — "The Forgotten Patient"**  
 > Predicting and preventing patient delays using pure NumPy ML on real hospital operational data.
 
+[![Live Demo](https://img.shields.io/badge/🚀%20Live%20Demo-Streamlit%20Cloud-FF4B4B?logo=streamlit&logoColor=white)](https://flowsight-ai-nxehgkr7jqwnapmeaasvbt.streamlit.app/)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.x-FF4B4B?logo=streamlit)](https://streamlit.io)
 [![NumPy](https://img.shields.io/badge/NumPy-ML%20from%20scratch-blue?logo=numpy)](https://numpy.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
+
+## 🌐 Live Demo
+
+> **[https://flowsight-ai-nxehgkr7jqwnapmeaasvbt.streamlit.app/](https://flowsight-ai-nxehgkr7jqwnapmeaasvbt.streamlit.app/)**
+
+Deployed on **Streamlit Community Cloud** — no installation needed, runs in your browser.
+
+---
+
 
 ## 🏥 Overview
 
