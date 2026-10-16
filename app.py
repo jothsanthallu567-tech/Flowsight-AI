@@ -440,15 +440,64 @@ if active_screen == "\U0001f4ca Operations Overview":
         else:
             st.markdown("<div class='grad-blue' style='text-align:center;min-height:160px;display:flex;flex-direction:column;justify-content:center;'><div style='font-size:3rem;'>\U0001f3e5</div><div style='font-size:1.1rem;font-weight:800;margin-top:8px;'>Metropolitan Health Hub</div><div style='font-size:0.86rem;opacity:0.9;margin-top:4px;'>12 Departments \u00b7 297 Staff \u00b7 252 Beds</div></div>", unsafe_allow_html=True)
 
-    st.markdown("<div class='wcard'><div class='wcard-title'>\U0001f321\ufe0f Hourly Arrival Heatmap \u2014 Department \u00d7 Hour of Day</div><div class='wcard-sub'>Average patient arrivals per department per hour slot \u2014 identifies peak demand windows</div>", unsafe_allow_html=True)
+    st.markdown("<div class='wcard'><div class='wcard-title'>🌡️ Hourly Arrival Heatmap — Department × Hour of Day</div><div class='wcard-sub'>Total patient arrivals per department per hour — darker = higher volume. Identifies peak demand windows across all 12 departments.</div>", unsafe_allow_html=True)
     fdf2 = fdf.copy(); fdf2['hour'] = fdf2['arrival_time'].dt.hour
     heat_pivot = fdf2.groupby(['department_name','hour'])['encounter_id'].count().reset_index().pivot(index='department_name',columns='hour',values='encounter_id').fillna(0)
-    fig_heat = px.imshow(heat_pivot, color_continuous_scale='Blues', labels=dict(x="Hour of Day",y="Department",color="Arrivals"), aspect='auto')
-    fig_heat.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=5,r=5,t=5,b=5), height=310,
-        xaxis=dict(tickfont=dict(size=11,color='#334155')), yaxis=dict(tickfont=dict(size=11,color='#1E293B')),
-        coloraxis_colorbar=dict(thickness=14,len=0.8))
+    # Ensure all 24 hours are present
+    heat_pivot = heat_pivot.reindex(columns=list(range(24)), fill_value=0)
+    heat_pivot = heat_pivot.sort_index()
+
+    fig_heat = px.imshow(
+        heat_pivot,
+        color_continuous_scale=[
+            [0.0,  '#EFF6FF'],
+            [0.2,  '#BFDBFE'],
+            [0.4,  '#60A5FA'],
+            [0.65, '#2563EB'],
+            [0.85, '#1E3A8A'],
+            [1.0,  '#0F172A'],
+        ],
+        labels=dict(x="Hour of Day", y="", color="Arrivals"),
+        x=[f"{h:02d}:00" for h in range(24)],
+        y=list(heat_pivot.index),
+        text_auto=True,
+        aspect="auto",
+        zmin=0,
+    )
+    fig_heat.update_traces(
+        textfont=dict(size=9, color='white'),
+        hovertemplate="<b>%{y}</b><br>Hour: %{x}<br>Arrivals: %{z}<extra></extra>"
+    )
+    fig_heat.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=140, r=80, t=20, b=60),
+        height=420,
+        xaxis=dict(
+            title=dict(text="Hour of Day", font=dict(size=12, color='#334155')),
+            tickfont=dict(size=10, color='#334155'),
+            tickangle=-45,
+            side='bottom',
+            showgrid=False,
+        ),
+        yaxis=dict(
+            tickfont=dict(size=11, color='#1E293B'),
+            showgrid=False,
+            automargin=True,
+        ),
+        coloraxis_colorbar=dict(
+            title=dict(text="Arrivals", font=dict(size=11, color='#334155')),
+            thickness=16,
+            len=0.85,
+            tickfont=dict(size=10, color='#334155'),
+            outlinewidth=0,
+            x=1.01,
+        ),
+        font=dict(family="Plus Jakarta Sans, Inter, sans-serif"),
+    )
     st.plotly_chart(fig_heat, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
+
 
 # ============================================================
 # SCREEN 2 \u2014 DELAY PREDICTION ENGINE
