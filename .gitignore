@@ -38,3 +38,10 @@ ENV/
 # Coverage
 .coverage
 htmlcov/
+
+# Firebase credentials
+firebase-service-account.json
+*.json
+
+# Streamlit secrets
+.streamlit/secrets.toml
