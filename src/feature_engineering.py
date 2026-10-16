@@ -16,18 +16,25 @@ class FeaturePipeline:
         df['day_of_week'] = df['arrival_time'].dt.dayofweek
         df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
         
-        # Calculate past 1-hour department workload if not already supplied
+        # Fast vectorized 1-hour rolling arrival count per department
+        # Uses numpy searchsorted (O(n log n)) instead of nested loops (O(n²))
         if 'recent_1h_dept_arrivals' not in df.columns:
-            recent_arrivals = np.zeros(len(df))
+            recent_arrivals = np.zeros(len(df), dtype=float)
             dept_ids = df['department_id'].values
-            arrival_times = df['arrival_time'].values
+            arrival_times = df['arrival_time'].values.astype('datetime64[ns]')
+            one_hour_ns = np.timedelta64(1, 'h').astype('timedelta64[ns]')
+
             for dept in np.unique(dept_ids):
-                dept_indices = np.where(dept_ids == dept)[0]
-                dept_times = arrival_times[dept_indices]
-                for i, t in enumerate(dept_times):
-                    t_start = t - np.timedelta64(1, 'h')
-                    count = np.sum((dept_times >= t_start) & (dept_times < t))
-                    recent_arrivals[dept_indices[i]] = count
+                mask = dept_ids == dept
+                dept_indices = np.where(mask)[0]
+                dept_times = arrival_times[mask]
+                # dept_times is already sorted (df sorted by arrival_time)
+                for i, idx in enumerate(dept_indices):
+                    t = dept_times[i]
+                    t_start = t - one_hour_ns
+                    lo = np.searchsorted(dept_times, t_start, side='left')
+                    hi = np.searchsorted(dept_times, t, side='left')
+                    recent_arrivals[idx] = hi - lo
 
             df['recent_1h_dept_arrivals'] = recent_arrivals
         return df

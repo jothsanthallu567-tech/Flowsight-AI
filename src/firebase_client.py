@@ -10,9 +10,10 @@ Usage
 
 Credentials
 -----------
-The SDK is initialised from the service-account JSON placed at the
-project root.  The path is resolved relative to this file so it works
-regardless of where the process is launched from.
+Two modes, tried in order:
+  1. Streamlit secrets  (.streamlit/secrets.toml  [firebase] table)
+  2. Service-account JSON file  (firebase-service-account.json at project root,
+     or path in the FIREBASE_KEY_PATH env var)
 """
 
 import os
@@ -21,7 +22,6 @@ from typing import Any
 
 import firebase_admin
 from firebase_admin import credentials, firestore
-import streamlit as st
 
 logger = logging.getLogger(__name__)
 
@@ -44,14 +44,16 @@ def _init_firebase() -> None:
         return  # Already initialised
 
     # 1. Try Streamlit secrets (preferred in cloud deployments)
+    # Import streamlit lazily to avoid import errors in non-Streamlit contexts
     try:
+        import streamlit as st
         secret = dict(st.secrets["firebase"])
         cred = credentials.Certificate(secret)
         firebase_admin.initialize_app(cred)
         logger.info("Firebase initialised from Streamlit secrets.")
         return
-    except (KeyError, FileNotFoundError):
-        pass
+    except Exception:
+        pass  # Not in a Streamlit context or no firebase secret — fall through
 
     # 2. Fall back to the service-account JSON file on disk
     key_path = os.environ.get("FIREBASE_KEY_PATH", _DEFAULT_KEY_PATH)
@@ -73,11 +75,21 @@ def _init_firebase() -> None:
 # Public helpers
 # ---------------------------------------------------------------------------
 
-@st.cache_resource(show_spinner=False)
 def get_db():
-    """Return a cached Firestore client (initialises Firebase if needed)."""
+    """Return a Firestore client (initialises Firebase if needed)."""
     _init_firebase()
-    return firestore.client()
+    # Use Streamlit cache_resource if available; otherwise just return client
+    try:
+        import streamlit as st
+
+        @st.cache_resource(show_spinner=False)
+        def _cached_client():
+            _init_firebase()
+            return firestore.client()
+
+        return _cached_client()
+    except ImportError:
+        return firestore.client()
 
 
 # ---------------------------------------------------------------------------
@@ -85,13 +97,13 @@ def get_db():
 # ---------------------------------------------------------------------------
 
 def save_document(collection: str, doc_id: str, data: dict) -> None:
-    """Write (or overwrite) a document."""
+    """Write (or overwrite) a Firestore document."""
     get_db().collection(collection).document(doc_id).set(data)
     logger.debug("Saved %s/%s", collection, doc_id)
 
 
 def update_document(collection: str, doc_id: str, data: dict) -> None:
-    """Merge-update an existing document (only provided fields are changed)."""
+    """Merge-update a document (only the provided fields are changed)."""
     get_db().collection(collection).document(doc_id).set(data, merge=True)
     logger.debug("Updated %s/%s", collection, doc_id)
 
@@ -124,7 +136,7 @@ def delete_document(collection: str, doc_id: str) -> None:
 
 def query_collection(collection: str, field: str, operator: str, value: Any, limit: int = 500) -> list:
     """
-    Simple filter query.
+    Simple filter query on a Firestore collection.
 
     Parameters
     ----------

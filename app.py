@@ -6,6 +6,8 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import os
 import sys
+import datetime
+import uuid
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, 'assets')
@@ -17,6 +19,13 @@ from model_from_scratch import LinearRegressionScratch
 from baseline import DepartmentMedianBaseline
 from evaluation import calculate_metrics
 from investigation_engine import generate_investigate_first_queue
+
+# Firebase integration (optional — graceful fallback if not configured)
+try:
+    from firebase_client import save_document, get_collection
+    FIREBASE_ENABLED = True
+except Exception:
+    FIREBASE_ENABLED = False
 
 # ============================================================
 # PAGE CONFIG
@@ -195,10 +204,63 @@ with st.sidebar:
             "\U0001f6a8 Bottleneck Investigator",
             "\U0001f465 Patient Demographics",
             "\U0001f52c Model Lab & Diagnostics",
-            "\U0001f9ea Diagnostic Test TAT"
+            "\U0001f9ea Diagnostic Test TAT",
+            "\U0001f525 Firestore Data Hub"
         ],
         label_visibility="collapsed"
     )
+
+    # ---- Firebase Export Panel ----
+    if FIREBASE_ENABLED:
+        st.markdown("""<hr style="border:none;border-top:1.5px solid #DBEAFE;margin:12px 0 10px;">
+        <div style="font-size:0.76rem;font-weight:800;text-transform:uppercase;color:#94A3B8;letter-spacing:0.08em;margin-bottom:8px;margin-left:4px;">🔥 Firebase Sync</div>""", unsafe_allow_html=True)
+        if st.button("📤 Export Bottlenecks", use_container_width=True, help="Save Dec 2025 bottleneck analysis to Firestore"):
+            try:
+                with st.spinner("Syncing to Firestore…"):
+                    X_exp, _ = pipeline.transform(test_df)
+                    q_exp = generate_investigate_first_queue(test_df, model.predict(X_exp))
+                    batch_id = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                    for _, row in q_exp.head(20).iterrows():
+                        doc_id = f"{batch_id}_{row['department_id']}_{row['hour_slot']:02d}"
+                        save_document("bottlenecks", doc_id, {
+                            "batch_id": batch_id,
+                            "department": str(row["department_name"]),
+                            "hour_slot": int(row["hour_slot"]),
+                            "affected_encounters": int(row["affected_encounters"]),
+                            "avg_predicted_wait": round(float(row["avg_predicted_wait"]), 2),
+                            "avg_excess_wait": round(float(row["avg_excess_wait"]), 2),
+                            "impact_score": round(float(row["impact_score"]), 2),
+                            "suggested_action": str(row["suggested_action"]),
+                            "exported_at": datetime.datetime.utcnow().isoformat()
+                        })
+                st.toast(f"✅ Exported {min(20, len(q_exp))} bottleneck records!", icon="🔥")
+            except Exception as e:
+                st.toast(f"❌ Export failed: {e}", icon="⚠️")
+
+        if st.button("📊 Export Model Metrics", use_container_width=True, help="Save model performance snapshot to Firestore"):
+            try:
+                with st.spinner("Saving metrics…"):
+                    save_document("model_metrics", datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S"), {
+                        "model": "LinearRegressionScratch",
+                        "learning_rate": 0.05,
+                        "iterations": 1500,
+                        "mae": round(m_metrics['MAE'], 4),
+                        "rmse": round(m_metrics['RMSE'], 4),
+                        "r2": round(m_metrics['R2'], 4),
+                        "baseline_mae": round(b_metrics['MAE'], 4),
+                        "baseline_rmse": round(b_metrics['RMSE'], 4),
+                        "test_set_size": len(test_df),
+                        "train_set_size": len(train_df),
+                        "recorded_at": datetime.datetime.utcnow().isoformat()
+                    })
+                st.toast("✅ Model metrics saved to Firestore!", icon="📊")
+            except Exception as e:
+                st.toast(f"❌ Export failed: {e}", icon="⚠️")
+    else:
+        st.markdown("""
+        <div style="background:#FFF7ED;border:1.5px solid #FED7AA;border-radius:10px;padding:10px 12px;font-size:0.78rem;color:#92400E;font-weight:600;">
+        🔥 Firebase not configured.<br>Add <code>firebase-service-account.json</code> to enable sync.
+        </div>""", unsafe_allow_html=True)
 
     st.markdown("""<hr style="border:none;border-top:1.5px solid #DBEAFE;margin:12px 0 10px;">
     <div style="font-size:0.76rem;font-weight:800;text-transform:uppercase;color:#94A3B8;letter-spacing:0.08em;margin-bottom:8px;margin-left:4px;">Data Snapshot</div>""", unsafe_allow_html=True)
@@ -232,6 +294,7 @@ page_meta = {
     "\U0001f465 Patient Demographics":    ("\U0001f465 Patient Demographics",    "Analyse patient population, chronic conditions, insurance mix & delay equity"),
     "\U0001f52c Model Lab & Diagnostics": ("\U0001f52c Model Lab & Diagnostics", "Inspect model performance, loss convergence, feature weights & residual distribution"),
     "\U0001f9ea Diagnostic Test TAT":     ("\U0001f9ea Diagnostic Test TAT",     "Monitor lab & radiology turnaround times by modality, priority & department"),
+    "\U0001f525 Firestore Data Hub":      ("\U0001f525 Firestore Data Hub",      "Browse and manage data exported to Firebase Firestore — bottlenecks, metrics & predictions"),
 }
 title_txt, subtitle_txt = page_meta[active_screen]
 
@@ -273,7 +336,7 @@ if active_screen == "\U0001f4ca Operations Overview":
         dept_opts = ["All Departments"] + sorted(df['department_name'].unique().tolist())
         dept_sel  = st.selectbox("\U0001f3e5 Department", dept_opts)
     with fc3:
-        svc_opts = ["All Service Lines"] + sorted(df['service_type'].dropna().unique().tolist())
+        svc_opts = ["All Service Lines"] + (sorted(df['service_type'].dropna().unique().tolist()) if 'service_type' in df.columns else [])
         svc_sel  = st.selectbox("\u2695\ufe0f Service Line", svc_opts)
     with fc4:
         st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
@@ -309,7 +372,7 @@ if active_screen == "\U0001f4ca Operations Overview":
             xaxis=dict(showgrid=False,tickfont=dict(size=11,color='#64748B')),
             yaxis=dict(title="ED Visits",titlefont=dict(size=12,color='#3B82F6'),showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#3B82F6')),
             yaxis2=dict(title="Avg Wait (min)",titlefont=dict(size=12,color='#F43F5E'),showgrid=False,tickfont=dict(size=11,color='#F43F5E')))
-        st.plotly_chart(fig_combo, width="stretch")
+        st.plotly_chart(fig_combo, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with r1b:
@@ -322,7 +385,7 @@ if active_screen == "\U0001f4ca Operations Overview":
             annotations=[dict(text=f'<b>{len(fdf):,}</b><br><span style="font-size:11px;color:#64748B;">Total</span>', x=0.5,y=0.5,font=dict(size=22,color='#1E293B'),showarrow=False)],
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=10,r=10,t=10,b=10), height=280,
             legend=dict(orientation="h",y=-0.12,xanchor="center",x=0.5,font=dict(size=11,color='#334155')))
-        st.plotly_chart(fig_triage, width="stretch")
+        st.plotly_chart(fig_triage, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     r2a, r2b = st.columns([1.65, 1.0])
@@ -331,16 +394,16 @@ if active_screen == "\U0001f4ca Operations Overview":
         dept_agg = fdf.groupby('department_name').agg(wait=('wait_minutes','mean'), service=('service_minutes','mean')).reset_index().sort_values('wait',ascending=True)
         fig_stacked = go.Figure()
         fig_stacked.add_trace(go.Bar(y=dept_agg['department_name'], x=dept_agg['wait'], name='Wait Time', orientation='h', marker_color='#3B82F6',
-            text=dept_agg['wait'].round(0).astype(int), textposition='inside', insidetextanchor='middle', textfont=dict(color='white',size=11,weight='bold')))
+            text=dept_agg['wait'].round(0).astype(int), textposition='inside', insidetextanchor='middle', textfont=dict(color='white',size=11)))
         fig_stacked.add_trace(go.Bar(y=dept_agg['department_name'], x=dept_agg['service'], name='Service Time', orientation='h', marker_color='#10B981',
-            text=dept_agg['service'].round(0).astype(int), textposition='inside', insidetextanchor='middle', textfont=dict(color='white',size=11,weight='bold')))
+            text=dept_agg['service'].round(0).astype(int), textposition='inside', insidetextanchor='middle', textfont=dict(color='white',size=11)))
         fig_stacked.add_vline(x=60, line_width=2.5, line_dash='dash', line_color='#F43F5E',
-            annotation_text='Target 60 min', annotation_font=dict(size=11,color='#B91C1C',weight='bold'))
+            annotation_text='Target 60 min', annotation_font=dict(size=11,color='#B91C1C'))
         fig_stacked.update_layout(barmode='stack', paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=5,r=5,t=5,b=5), height=330,
             xaxis=dict(title="Duration (min)",titlefont=dict(size=12,color='#334155'),showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#64748B')),
-            yaxis=dict(showgrid=False,tickfont=dict(size=11,color='#1E293B',weight='bold')),
+            yaxis=dict(showgrid=False,tickfont=dict(size=11,color='#1E293B')),
             legend=dict(orientation="h",y=-0.18,xanchor="center",x=0.5,font=dict(size=11,color='#334155')))
-        st.plotly_chart(fig_stacked, width="stretch")
+        st.plotly_chart(fig_stacked, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with r2b:
@@ -349,11 +412,11 @@ if active_screen == "\U0001f4ca Operations Overview":
         out_colors = {'Discharged':'#10B981','Admitted':'#3B82F6','Transferred':'#F59E0B','Left before care':'#F43F5E'}
         fig_outcome = go.Figure(go.Bar(x=outcome_counts.values, y=outcome_counts.index, orientation='h',
             marker_color=[out_colors.get(o,'#8B5CF6') for o in outcome_counts.index],
-            text=outcome_counts.values, textposition='outside', textfont=dict(size=12,weight='bold',color='#1E293B')))
+            text=outcome_counts.values, textposition='outside', textfont=dict(size=12,color='#1E293B')))
         fig_outcome.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=5,r=5,t=5,b=5), height=230,
             xaxis=dict(showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#64748B')),
-            yaxis=dict(showgrid=False,tickfont=dict(size=11,color='#1E293B',weight='bold')), showlegend=False)
-        st.plotly_chart(fig_outcome, width="stretch")
+            yaxis=dict(showgrid=False,tickfont=dict(size=11,color='#1E293B')), showlegend=False)
+        st.plotly_chart(fig_outcome, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     r3a, r3b = st.columns([1.65, 1.0])
@@ -364,14 +427,14 @@ if active_screen == "\U0001f4ca Operations Overview":
         fac_tbl.columns = ['Department','Avg Wait (min)','Avg Service (min)','Encounters','Staff','Beds','Daily Capacity']
         fac_tbl['Avg Wait (min)'] = fac_tbl['Avg Wait (min)'].round(1)
         fac_tbl['Avg Service (min)'] = fac_tbl['Avg Service (min)'].round(1)
-        st.dataframe(fac_tbl, width="stretch", hide_index=True)
+        st.dataframe(fac_tbl, use_container_width=True, hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with r3b:
         img_path = os.path.join(ASSETS_DIR, 'hospital_facility.jpg')
         if os.path.exists(img_path):
             st.markdown("<div class='img-card'>", unsafe_allow_html=True)
-            st.image(img_path, width="stretch")
+            st.image(img_path, use_column_width=True)
             st.markdown("""<div class='img-cap' style='background:linear-gradient(90deg,#3B82F6,#60A5FA);'>\U0001f3e5 Metropolitan Health Operations Hub</div>
             <div style='padding:12px 16px;font-size:0.86rem;color:#334155;line-height:1.6;background:#FFFFFF;'><b>Live Network Telemetry:</b> Coordinating patient transfer gateways, bed management and clinical team capacity across all 12 inpatient and surgical wings.</div></div>""", unsafe_allow_html=True)
         else:
@@ -382,9 +445,9 @@ if active_screen == "\U0001f4ca Operations Overview":
     heat_pivot = fdf2.groupby(['department_name','hour'])['encounter_id'].count().reset_index().pivot(index='department_name',columns='hour',values='encounter_id').fillna(0)
     fig_heat = px.imshow(heat_pivot, color_continuous_scale='Blues', labels=dict(x="Hour of Day",y="Department",color="Arrivals"), aspect='auto')
     fig_heat.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=5,r=5,t=5,b=5), height=310,
-        xaxis=dict(tickfont=dict(size=11,color='#334155')), yaxis=dict(tickfont=dict(size=11,color='#1E293B',weight='bold')),
+        xaxis=dict(tickfont=dict(size=11,color='#334155')), yaxis=dict(tickfont=dict(size=11,color='#1E293B')),
         coloraxis_colorbar=dict(thickness=14,len=0.8))
-    st.plotly_chart(fig_heat, width="stretch")
+    st.plotly_chart(fig_heat, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ============================================================
@@ -489,7 +552,7 @@ elif active_screen == "\U0001f52e Delay Prediction Engine":
         xaxis=dict(title="Hour",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#64748B')),
         yaxis=dict(title="Predicted Wait (min)",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),
         legend=dict(orientation="h",y=1.05,x=1,xanchor="right",font=dict(size=11,color='#334155')))
-    st.plotly_chart(fig_hr, width="stretch")
+    st.plotly_chart(fig_hr, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ============================================================
@@ -537,18 +600,18 @@ elif active_screen == "\U0001f6a8 Bottleneck Investigator":
         q75 = top20['impact_score'].quantile(0.75); q50 = top20['impact_score'].quantile(0.5)
         bar_colors = ['#F43F5E' if s>q75 else ('#F59E0B' if s>q50 else '#3B82F6') for s in top20['impact_score']]
         fig_bt = go.Figure(go.Bar(x=top20['impact_score'],y=top20['slot_label'],orientation='h',marker_color=bar_colors,
-            text=top20['impact_score'].round(1),textposition='outside',textfont=dict(size=10,color='#1E293B',weight='bold')))
+            text=top20['impact_score'].round(1),textposition='outside',textfont=dict(size=10,color='#1E293B')))
         fig_bt.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=50,t=5,b=5),height=420,
             xaxis=dict(title="Impact Score",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#64748B')),
-            yaxis=dict(showgrid=False,tickfont=dict(size=10,color='#1E293B',weight='bold')),showlegend=False)
-        st.plotly_chart(fig_bt, width="stretch")
+            yaxis=dict(showgrid=False,tickfont=dict(size=10,color='#1E293B')),showlegend=False)
+        st.plotly_chart(fig_bt, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with bt_right:
         img_path2 = os.path.join(ASSETS_DIR, 'bottleneck_command.jpg')
         if os.path.exists(img_path2):
             st.markdown("<div class='img-card'>", unsafe_allow_html=True)
-            st.image(img_path2, width="stretch")
+            st.image(img_path2, use_column_width=True)
             st.markdown("""<div class='img-cap' style='background:linear-gradient(90deg,#F43F5E,#FB7185);'>\U0001f6a8 Clinical Flow Dispatch</div>
             <div style='padding:12px 16px;font-size:0.86rem;color:#334155;line-height:1.6;background:#FFFFFF;'><b>Action Protocol:</b> Float nurses dispatched to top bottlenecks; diagnostic imaging expedited to alleviate critical patient backlog.</div></div>""", unsafe_allow_html=True)
         else:
@@ -556,14 +619,14 @@ elif active_screen == "\U0001f6a8 Bottleneck Investigator":
 
         st.markdown("<div class='wcard' style='margin-top:14px;'><div class='wcard-title' style='font-size:0.98rem;'>\U0001f4cb Action Summary</div>", unsafe_allow_html=True)
         act_counts = queue_data['suggested_action'].value_counts().reset_index(); act_counts.columns = ['Action Required','Count']
-        st.dataframe(act_counts, width="stretch", hide_index=True)
+        st.dataframe(act_counts, use_container_width=True, hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='wcard'><div class='wcard-title'>\U0001f4cb Full Bottleneck Queue \u2014 December 2025</div><div class='wcard-sub'>All detected bottleneck slots ranked by impact score</div>", unsafe_allow_html=True)
     dq = queue_data[['department_name','hour_slot','affected_encounters','avg_predicted_wait','avg_baseline_wait','avg_excess_wait','impact_score','suggested_action']].copy()
     dq.columns = ['Department','Hour','Affected Patients','Avg Predicted Wait','Avg Baseline Wait','Avg Excess Wait','Impact Score','Suggested Action']
     for c in ['Avg Predicted Wait','Avg Baseline Wait','Avg Excess Wait','Impact Score']: dq[c] = dq[c].round(1)
-    st.dataframe(dq, width="stretch", hide_index=True)
+    st.dataframe(dq, use_container_width=True, hide_index=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ============================================================
@@ -587,7 +650,7 @@ elif active_screen == "\U0001f465 Patient Demographics":
         fig_age.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=5,t=5,b=5),height=260,
             xaxis=dict(title="Age (years)",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#64748B')),
             yaxis=dict(title="Count",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),showlegend=False)
-        st.plotly_chart(fig_age, width="stretch")
+        st.plotly_chart(fig_age, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with pa2:
@@ -596,10 +659,10 @@ elif active_screen == "\U0001f465 Patient Demographics":
         cond_colors = {'None':'#10B981','Cardiac':'#F43F5E','Hypertension':'#F59E0B','Diabetes':'#3B82F6','Asthma':'#8B5CF6','Other':'#64748B'}
         fig_cond = go.Figure(data=[go.Pie(labels=cond_counts.index.tolist(),values=cond_counts.values.tolist(),hole=0.55,
             marker=dict(colors=[cond_colors.get(c,'#8B5CF6') for c in cond_counts.index]),
-            textinfo='label+percent',textfont=dict(size=11,weight='bold'))])
+            textinfo='label+percent',textfont=dict(size=11))])
         fig_cond.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=5,t=5,b=5),height=260,
             legend=dict(orientation="h",y=-0.1,xanchor="center",x=0.5,font=dict(size=10,color='#334155')))
-        st.plotly_chart(fig_cond, width="stretch")
+        st.plotly_chart(fig_cond, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     pb1, pb2 = st.columns(2)
@@ -609,12 +672,12 @@ elif active_screen == "\U0001f465 Patient Demographics":
         ins_colors = {'Private':'#3B82F6','Public':'#10B981','Self-pay':'#F43F5E','Unknown':'#64748B'}
         fig_ins = go.Figure(go.Bar(x=ins_agg['insurance_type'],y=ins_agg['wait_minutes'],
             marker_color=[ins_colors.get(t,'#8B5CF6') for t in ins_agg['insurance_type']],
-            text=ins_agg['wait_minutes'].round(1),textposition='outside',textfont=dict(size=12,weight='bold',color='#1E293B')))
+            text=ins_agg['wait_minutes'].round(1),textposition='outside',textfont=dict(size=12,color='#1E293B')))
         fig_ins.add_hline(y=45,line_dash='dash',line_color='#F43F5E',annotation_text='45-min target',annotation_font=dict(size=11,color='#B91C1C'))
         fig_ins.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=5,t=5,b=5),height=250,
-            xaxis=dict(showgrid=False,tickfont=dict(size=12,color='#1E293B',weight='bold')),
+            xaxis=dict(showgrid=False,tickfont=dict(size=12,color='#1E293B')),
             yaxis=dict(title="Avg Wait (min)",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),showlegend=False)
-        st.plotly_chart(fig_ins, width="stretch")
+        st.plotly_chart(fig_ins, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with pb2:
@@ -625,10 +688,10 @@ elif active_screen == "\U0001f465 Patient Demographics":
             labels={'encounter_id':'Encounters','triage_level':'Triage Level','sex':'Sex'},
             category_orders={'triage_level':['Low','Medium','High','Critical']})
         fig_sex.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=5,t=5,b=5),height=250,
-            xaxis=dict(tickfont=dict(size=12,color='#1E293B',weight='bold')),
+            xaxis=dict(tickfont=dict(size=12,color='#1E293B')),
             yaxis=dict(title="Encounters",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),
             legend=dict(font=dict(size=11,color='#334155')))
-        st.plotly_chart(fig_sex, width="stretch")
+        st.plotly_chart(fig_sex, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='wcard'><div class='wcard-title'>\U0001f4c8 Avg Wait Time by Chronic Condition & Triage Level</div><div class='wcard-sub'>Do patients with chronic conditions wait longer? Broken down by triage urgency</div>", unsafe_allow_html=True)
@@ -639,10 +702,10 @@ elif active_screen == "\U0001f465 Patient Demographics":
         category_orders={'triage_level':['Critical','High','Medium','Low']})
     fig_ct.add_hline(y=45,line_dash='dash',line_color='#94A3B8',annotation_text='45-min target',annotation_font=dict(size=11,color='#94A3B8'))
     fig_ct.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=5,t=5,b=5),height=290,
-        xaxis=dict(tickfont=dict(size=11,color='#1E293B',weight='bold')),
+        xaxis=dict(tickfont=dict(size=11,color='#1E293B')),
         yaxis=dict(showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),
         legend=dict(orientation="h",y=1.05,x=1,xanchor="right",font=dict(size=11,color='#334155')))
-    st.plotly_chart(fig_ct, width="stretch")
+    st.plotly_chart(fig_ct, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ============================================================
@@ -660,7 +723,7 @@ elif active_screen == "\U0001f52c Model Lab & Diagnostics":
         {"Model":"Global Mean Naive","MAE":"22.45","RMSE":"27.81","R\u00b2":"0.000","Method":"Empirical Mean","Status":"\U0001f4c9 Naive Baseline"},
     ])
     st.markdown("<div class='wcard-title' style='margin-bottom:10px;'>\U0001f4ca Held-Out Test Set Benchmarks (December 2025 \u2014 697 encounters)</div>", unsafe_allow_html=True)
-    st.dataframe(bench, width="stretch", hide_index=True)
+    st.dataframe(bench, use_container_width=True, hide_index=True)
     st.markdown("<div class='sdiv'></div>", unsafe_allow_html=True)
 
     m1, m2 = st.columns(2)
@@ -677,7 +740,7 @@ elif active_screen == "\U0001f52c Model Lab & Diagnostics":
             xaxis=dict(title="Actual Wait (min)",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#64748B')),
             yaxis=dict(title="Predicted Wait (min)",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),
             legend=dict(orientation="h",y=1.05,x=1,xanchor="right",font=dict(size=11,color='#334155')))
-        st.plotly_chart(fig_cal, width="stretch")
+        st.plotly_chart(fig_cal, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with m2:
@@ -688,7 +751,7 @@ elif active_screen == "\U0001f52c Model Lab & Diagnostics":
         fig_res.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=5,t=5,b=5),height=280,
             xaxis=dict(title="Prediction Error (min)",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#64748B')),
             yaxis=dict(title="Count",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),showlegend=False)
-        st.plotly_chart(fig_res, width="stretch")
+        st.plotly_chart(fig_res, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='wcard'><div class='wcard-title'>\U0001f4c8 Gradient Descent Loss Convergence</div><div class='wcard-sub'>MSE loss reduction across 1,500 optimisation iterations</div>", unsafe_allow_html=True)
@@ -697,7 +760,7 @@ elif active_screen == "\U0001f52c Model Lab & Diagnostics":
     fig_loss.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=5,t=5,b=5),height=240,
         xaxis=dict(title="Iteration",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#64748B')),
         yaxis=dict(title="MSE Loss",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),showlegend=False)
-    st.plotly_chart(fig_loss, width="stretch")
+    st.plotly_chart(fig_loss, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     if pipeline.feature_names and model.weights is not None:
@@ -710,8 +773,8 @@ elif active_screen == "\U0001f52c Model Lab & Diagnostics":
             text=wt_df['Weight'].round(2),textposition='outside',textfont=dict(size=10,color='#1E293B')))
         fig_wt.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=55,t=5,b=5),height=390,
             xaxis=dict(title="Coefficient",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#64748B')),
-            yaxis=dict(showgrid=False,tickfont=dict(size=10,color='#1E293B',weight='bold')),showlegend=False)
-        st.plotly_chart(fig_wt, width="stretch")
+            yaxis=dict(showgrid=False,tickfont=dict(size=10,color='#1E293B')),showlegend=False)
+        st.plotly_chart(fig_wt, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 # ============================================================
@@ -732,20 +795,20 @@ elif active_screen == "\U0001f9ea Diagnostic Test TAT":
         st.markdown("<div class='wcard'><div class='wcard-title'>\U0001f4ca Mean TAT by Test Modality & Priority</div><div class='wcard-sub'>Average turnaround time across 6 modalities split by order priority</div>", unsafe_allow_html=True)
         tat_agg = diagnostic_tests.groupby(['test_type','priority'])['tat_minutes'].mean().reset_index()
         fig_tat = px.bar(tat_agg,x='test_type',y='tat_minutes',color='priority',barmode='group',
-            color_discrete_map={'Urgent':'#F43F5E','Routine':'#3B82F6'},
+            color_discrete_map={'Urgent':'#F43F5E','High':'#F59E0B','Routine':'#3B82F6'},
             labels={'test_type':'Test Type','tat_minutes':'Avg TAT (min)','priority':'Priority'})
         fig_tat.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=5,t=5,b=5),height=290,
-            xaxis=dict(tickfont=dict(size=12,color='#1E293B',weight='bold')),
+            xaxis=dict(tickfont=dict(size=12,color='#1E293B')),
             yaxis=dict(title="Avg TAT (min)",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),
             legend=dict(orientation="h",y=1.05,x=1,xanchor="right",font=dict(size=11,color='#334155')))
-        st.plotly_chart(fig_tat, width="stretch")
+        st.plotly_chart(fig_tat, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with da2:
         img_path4 = os.path.join(ASSETS_DIR, 'diagnostic_radiology.jpg')
         if os.path.exists(img_path4):
             st.markdown("<div class='img-card'>", unsafe_allow_html=True)
-            st.image(img_path4, width="stretch")
+            st.image(img_path4, use_column_width=True)
             st.markdown("""<div class='img-cap' style='background:linear-gradient(90deg,#0D9488,#2DD4BF);'>\U0001f9ea Radiology & Diagnostic Imaging Core</div>
             <div style='padding:12px 16px;font-size:0.86rem;color:#334155;line-height:1.6;background:#FFFFFF;'><b>TAT SLA:</b> Expediting STAT lab results and emergency radiology orders unlocks consultation bottlenecks.</div></div>""", unsafe_allow_html=True)
         else:
@@ -758,9 +821,9 @@ elif active_screen == "\U0001f9ea Diagnostic Test TAT":
             color_discrete_sequence=['#3B82F6','#10B981','#F43F5E','#F59E0B','#8B5CF6','#14B8A6'],
             labels={'tat_minutes':'TAT (min)','test_type':'Test Type'})
         fig_violin.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=5,t=5,b=5),height=300,
-            xaxis=dict(tickfont=dict(size=11,color='#1E293B',weight='bold')),
+            xaxis=dict(tickfont=dict(size=11,color='#1E293B')),
             yaxis=dict(showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),showlegend=False)
-        st.plotly_chart(fig_violin, width="stretch")
+        st.plotly_chart(fig_violin, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with db2:
@@ -775,7 +838,7 @@ elif active_screen == "\U0001f9ea Diagnostic Test TAT":
             xaxis=dict(tickangle=-45,tickfont=dict(size=10,color='#64748B')),
             yaxis=dict(showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),
             legend=dict(orientation="h",y=1.05,x=1,xanchor="right",font=dict(size=11,color='#334155')))
-        st.plotly_chart(fig_mtat, width="stretch")
+        st.plotly_chart(fig_mtat, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='wcard'><div class='wcard-title'>\u26a0\ufe0f SLA Breach Analysis \u2014 Tests Exceeding 60-min Target TAT</div><div class='wcard-sub'>Percentage of orders breaching the 60-min SLA, by test type and priority</div>", unsafe_allow_html=True)
@@ -783,16 +846,79 @@ elif active_screen == "\U0001f9ea Diagnostic Test TAT":
     sla_agg = diag_sla.groupby(['test_type','priority']).agg(total=('test_id','count'),breaches=('sla_breach','sum')).reset_index()
     sla_agg['breach_pct'] = (sla_agg['breaches']/sla_agg['total']*100).round(1)
     fig_sla = px.bar(sla_agg,x='test_type',y='breach_pct',color='priority',barmode='group',
-        color_discrete_map={'Urgent':'#F43F5E','Routine':'#F59E0B'},
+        color_discrete_map={'Urgent':'#F43F5E','High':'#F59E0B','Routine':'#3B82F6'},
         text=sla_agg['breach_pct'].astype(str)+'%',
         labels={'breach_pct':'SLA Breach %','test_type':'Test Type'})
     fig_sla.add_hline(y=20,line_dash='dash',line_color='#94A3B8',annotation_text='20% threshold',annotation_font=dict(size=11,color='#94A3B8'))
     fig_sla.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",margin=dict(l=5,r=5,t=5,b=5),height=260,
-        xaxis=dict(tickfont=dict(size=12,color='#1E293B',weight='bold')),
+        xaxis=dict(tickfont=dict(size=12,color='#1E293B')),
         yaxis=dict(title="SLA Breach %",showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#334155')),
         legend=dict(orientation="h",y=1.05,x=1,xanchor="right",font=dict(size=11,color='#334155')))
-    st.plotly_chart(fig_sla, width="stretch")
+    st.plotly_chart(fig_sla, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
+
+# ============================================================
+# SCREEN 7 — FIRESTORE DATA HUB
+# ============================================================
+elif active_screen == "\U0001f525 Firestore Data Hub":
+    if not FIREBASE_ENABLED:
+        st.markdown("""
+        <div style='background:#FFF7ED;border:2px solid #FED7AA;border-radius:16px;padding:30px;text-align:center;'>
+            <div style='font-size:3rem;margin-bottom:12px;'>🔥</div>
+            <div style='font-size:1.3rem;font-weight:800;color:#92400E;'>Firebase Not Connected</div>
+            <div style='font-size:0.95rem;color:#B45309;margin-top:8px;'>
+                Add <code>firebase-service-account.json</code> to the project root to enable this screen.
+            </div>
+        </div>""", unsafe_allow_html=True)
+    else:
+        fh1, fh2 = st.columns(2)
+        with fh1:
+            st.markdown("<div class='wcard'><div class='wcard-title'>📥 Bottleneck Exports</div><div class='wcard-sub'>Records synced to the <b>bottlenecks</b> Firestore collection</div>", unsafe_allow_html=True)
+            try:
+                with st.spinner("Fetching from Firestore…"):
+                    bt_docs = get_collection("bottlenecks", limit=100)
+                if bt_docs:
+                    bt_df = pd.DataFrame(bt_docs)
+                    display_cols = [c for c in ['department','hour_slot','avg_predicted_wait','avg_excess_wait','impact_score','suggested_action','batch_id'] if c in bt_df.columns]
+                    st.dataframe(bt_df[display_cols], use_container_width=True, hide_index=True)
+                    st.markdown(f"<div style='font-size:0.82rem;color:#10B981;font-weight:700;margin-top:6px;'>✅ {len(bt_docs)} records in Firestore</div>", unsafe_allow_html=True)
+                else:
+                    st.info("No bottleneck data yet — click **Export Bottlenecks** in the sidebar to sync.")
+            except Exception as e:
+                st.error(f"Firestore read error: {e}")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with fh2:
+            st.markdown("<div class='wcard'><div class='wcard-title'>📊 Model Metric Snapshots</div><div class='wcard-sub'>Performance history saved to the <b>model_metrics</b> collection</div>", unsafe_allow_html=True)
+            try:
+                with st.spinner("Fetching from Firestore…"):
+                    mm_docs = get_collection("model_metrics", limit=50)
+                if mm_docs:
+                    mm_df = pd.DataFrame(mm_docs)
+                    display_cols2 = [c for c in ['recorded_at','mae','rmse','r2','baseline_mae','test_set_size'] if c in mm_df.columns]
+                    st.dataframe(mm_df[display_cols2], use_container_width=True, hide_index=True)
+                    # MAE trend chart
+                    if 'mae' in mm_df.columns and len(mm_df) > 1:
+                        mm_df_s = mm_df.sort_values('recorded_at') if 'recorded_at' in mm_df.columns else mm_df
+                        fig_mae = go.Figure()
+                        fig_mae.add_trace(go.Scatter(x=list(range(len(mm_df_s))), y=mm_df_s['mae'].values,
+                            mode='lines+markers', line=dict(color='#3B82F6', width=2.5),
+                            marker=dict(size=7, color='#3B82F6'), name='MAE'))
+                        if 'baseline_mae' in mm_df_s.columns:
+                            fig_mae.add_trace(go.Scatter(x=list(range(len(mm_df_s))), y=mm_df_s['baseline_mae'].values,
+                                mode='lines', line=dict(color='#F43F5E', dash='dash', width=2),
+                                name='Baseline MAE'))
+                        fig_mae.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                            margin=dict(l=5,r=5,t=5,b=5), height=180,
+                            xaxis=dict(title="Run #", tickfont=dict(size=10,color='#64748B'), showgrid=False),
+                            yaxis=dict(title="MAE (min)", showgrid=True, gridcolor='#F1F5F9', tickfont=dict(size=10,color='#334155')),
+                            legend=dict(orientation="h", y=1.1, font=dict(size=10)))
+                        st.plotly_chart(fig_mae, use_container_width=True)
+                else:
+                    st.info("No metrics yet — click **Export Model Metrics** in the sidebar to save a snapshot.")
+            except Exception as e:
+                st.error(f"Firestore read error: {e}")
+            st.markdown("</div>", unsafe_allow_html=True)
 
 # ============================================================
 # FOOTER
