@@ -370,8 +370,8 @@ if active_screen == "\U0001f4ca Operations Overview":
         fig_combo.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=5,r=5,t=5,b=5), height=280,
             legend=dict(orientation="h",y=1.05,x=1,xanchor="right",font=dict(size=11,color='#334155')),
             xaxis=dict(showgrid=False,tickfont=dict(size=11,color='#64748B')),
-            yaxis=dict(title="ED Visits",titlefont=dict(size=12,color='#3B82F6'),showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#3B82F6')),
-            yaxis2=dict(title="Avg Wait (min)",titlefont=dict(size=12,color='#F43F5E'),showgrid=False,tickfont=dict(size=11,color='#F43F5E')))
+            yaxis=dict(title="ED Visits",title_font=dict(size=12,color='#3B82F6'),showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#3B82F6')),
+            yaxis2=dict(title="Avg Wait (min)",title_font=dict(size=12,color='#F43F5E'),showgrid=False,tickfont=dict(size=11,color='#F43F5E')))
         st.plotly_chart(fig_combo, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -400,7 +400,7 @@ if active_screen == "\U0001f4ca Operations Overview":
         fig_stacked.add_vline(x=60, line_width=2.5, line_dash='dash', line_color='#F43F5E',
             annotation_text='Target 60 min', annotation_font=dict(size=11,color='#B91C1C'))
         fig_stacked.update_layout(barmode='stack', paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=5,r=5,t=5,b=5), height=330,
-            xaxis=dict(title="Duration (min)",titlefont=dict(size=12,color='#334155'),showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#64748B')),
+            xaxis=dict(title="Duration (min)",title_font=dict(size=12,color='#334155'),showgrid=True,gridcolor='#F1F5F9',tickfont=dict(size=11,color='#64748B')),
             yaxis=dict(showgrid=False,tickfont=dict(size=11,color='#1E293B')),
             legend=dict(orientation="h",y=-0.18,xanchor="center",x=0.5,font=dict(size=11,color='#334155')))
         st.plotly_chart(fig_stacked, use_container_width=True)
